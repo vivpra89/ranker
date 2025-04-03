@@ -1,0 +1,66 @@
+Reranker Evaluation Summary
+==========================
+
+Ranking Metrics:
+--------------
+
+click:
+  ndcg@1: 1.0000
+  map: 0.8333
+  mrr: 1.0000
+  ndcg@2: 0.6131
+  ndcg@3: 0.9197
+
+purchase:
+  ndcg@1: 0.0000
+  map: 0.3333
+  mrr: 0.3333
+  ndcg@2: 0.0000
+  ndcg@3: 0.5000
+
+add_to_cart:
+  ndcg@1: 1.0000
+  map: 1.0000
+  mrr: 1.0000
+  ndcg@2: 1.0000
+  ndcg@3: 1.0000
+
+Feature Importance:
+-----------------
+
+product:
+  click: 0.1732
+  purchase: 0.1117
+  add_to_cart: 0.0611
+
+user:
+  click: 0.1131
+  purchase: 0.0873
+  add_to_cart: 0.0583
+
+geo:
+  click: 0.0000
+  purchase: 0.0000
+  add_to_cart: 0.0000
+
+country:
+  click: 0.0000
+  purchase: 0.0000
+  add_to_cart: 0.0000
+
+price:
+  click: 0.0534
+  purchase: 0.0097
+  add_to_cart: 0.0173
+
+category:
+  click: 0.0179
+  purchase: 0.0104
+  add_to_cart: 0.0274
+
+Task Correlations:
+----------------
+                click  purchase  add_to_cart
+click        1.000000  0.353559     0.880683
+purchase     0.353559  1.000000     0.754484
+add_to_cart  0.880683  0.754484     1.000000
