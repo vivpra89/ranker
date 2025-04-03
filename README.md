@@ -61,6 +61,75 @@ trainer = ReRankerTrainer(model)
 trainer.train(train_loader, val_loader, num_epochs=10)
 ```
 
+## Architecture Overview
+
+Below is a detailed architecture diagram of the DCN v2 Re-ranker:
+
+```
+                                     DCN v2 Re-Ranker Architecture
+                                     ===========================
+
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              Input Features                                      │
+├───────────────┬───────────────┬────────────────┬──────────────┬───────────────┤
+│   Product     │    User       │     Geo        │  Country     │  Interaction   │
+│  Embeddings   │  Embeddings   │    Features    │  Features    │   History     │
+└───────┬───────┴───────┬───────┴───────┬────────┴──────┬───────┴───────┬───────┘
+        │               │               │                │               │
+┌───────▼───────┐ ┌─────▼─────┐ ┌──────▼──────┐ ┌──────▼──────┐ ┌─────▼─────┐
+│   Feature     │ │  Feature   │ │    Text     │ │    Text     │ │ Sequence  │
+│  Processing   │ │ Processing │ │  Embedder   │ │  Embedder   │ │  Encoder  │
+└───────┬───────┘ └─────┬─────┘ └──────┬──────┘ └──────┬──────┘ └─────┬─────┘
+        │               │               │                │               │
+        └───────────────┴───────────────┴────────┬──────┴───────────────┘
+                                                │
+                                    ┌───────────▼────────────┐
+                                    │    Feature Fusion      │
+                                    └───────────┬────────────┘
+                                                │
+                              ┌─────────────────┴─────────────────┐
+                              │                                   │
+                     ┌────────▼──────────┐            ┌──────────▼─────────┐
+                     │   Cross Network   │            │    Deep Network     │
+                     │                   │            │                     │
+                     │  Feature Crossing │            │ Non-linear Patterns │
+                     │   (Low-rank DCN)  │            │   (MLP w/ Skip)    │
+                     └────────┬──────────┘            └──────────┬─────────┘
+                              │                                   │
+                              └─────────────────┬─────────────────┘
+                                               │
+                                    ┌──────────▼───────────┐
+                                    │    Feature Fusion    │
+                                    └──────────┬───────────┘
+                                               │
+                                ┌──────────────┴──────────────┐
+                                │        Task Heads           │
+                        ┌───────┴──────┬────────┴───────┐
+                        │              │                │
+                   ┌────▼────┐    ┌────▼────┐     ┌────▼────┐
+                   │  Click  │    │Purchase │     │Add to   │
+                   │ Score   │    │ Score   │     │Cart     │
+                   └─────────┘    └─────────┘     └─────────┘
+```
+
+The architecture consists of several key components:
+
+1. **Input Features**: Multiple types of input features including product embeddings, user embeddings, geographical features, and interaction history.
+
+2. **Feature Processing**: Each input type goes through specific processing:
+   - Embeddings are processed through feature layers
+   - Text features are processed through transformer-based embedders
+   - Sequential data is handled by a dedicated sequence encoder
+
+3. **Core Architecture**:
+   - Cross Network: Efficiently models feature interactions using low-rank DCN
+   - Deep Network: Captures complex patterns using deep MLP with skip connections
+
+4. **Task Heads**: Multiple prediction heads for different tasks:
+   - Click prediction
+   - Purchase prediction
+   - Add-to-cart prediction
+
 ## Technical Documentation
 
 ### 1. Architecture Overview
