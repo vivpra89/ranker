@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Model checkpoints and logs
+models/
+logs/
+*.pth
+*.ckpt
+*.pt
+
+# Data
+data/
+*.csv
+*.json
+*.jsonl
+*.txt
+!requirements.txt
+
+# Evaluation results
+evaluation_results/
+
+# OS
+.DS_Store
+.env
+.env.*
+
+# Keep specific files
+!config.yml
+!data/test/
+!evaluation_results/evaluation_summary.txt
+!evaluation_results/feature_importance.csv
+!evaluation_results/ranking_metrics.csv
+!evaluation_results/score_distributions.png
+!evaluation_results/task_correlations.csv 
