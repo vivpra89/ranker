@@ -1,0 +1,464 @@
+{
+  "number": 0,
+  "params": {
+    "model.dcn_config.cross_layers": 3,
+    "model.dcn_config.num_heads": 3,
+    "model.dcn_config.hidden_layers": [
+      512,
+      256,
+      128
+    ],
+    "model.dcn_config.dropout_rate": 0.19110147410584094,
+    "model.dcn_config.cross_dropout": 0.14690701254124097,
+    "model.dcn_config.stochastic_depth_rate": 0.10184071654379061,
+    "model.dcn_config.feature_dropout": 0.06568444144322821,
+    "training.optimizer.learning_rate": 0.0007780655533345329,
+    "training.optimizer.weight_decay": 0.0055244171357912404
+  },
+  "score": 0.0,
+  "config": {
+    "features": {
+      "enabled_features": [
+        "product",
+        "user",
+        "interaction_sequence",
+        "geo",
+        "country",
+        "price_0",
+        "category_0",
+        "page_type",
+        "age",
+        "gender",
+        "region",
+        "product_body_part",
+        "product_gender",
+        "product_age_desc",
+        "product_taxonomy_id",
+        "anchor_body_part",
+        "anchor_gender",
+        "anchor_age_desc",
+        "anchor_taxonomy_id",
+        "event_dow",
+        "anchor_embeds"
+      ],
+      "feature_configs": {
+        "product": {
+          "enabled": true,
+          "type": "pretrained_embedding",
+          "dim": 64,
+          "description": "Product embeddings"
+        },
+        "user": {
+          "enabled": true,
+          "type": "pretrained_embedding",
+          "dim": 64,
+          "description": "User embeddings"
+        },
+        "interaction_sequence": {
+          "enabled": false,
+          "type": "sequence",
+          "input_dim": 64,
+          "dim": 64,
+          "max_seq_length": 50,
+          "num_products": 1000,
+          "transformer_config": {
+            "nhead": 4,
+            "num_layers": 2,
+            "dim_feedforward": 256,
+            "dropout": 0.1
+          },
+          "description": "Sequential product interactions"
+        },
+        "geo": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 16,
+          "num_categories": 4,
+          "description": "Geographic location"
+        },
+        "country": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 16,
+          "num_categories": 4,
+          "description": "Country"
+        },
+        "price_0": {
+          "enabled": true,
+          "type": "numeric",
+          "dim": 16,
+          "description": "Product price"
+        },
+        "category_0": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 16,
+          "num_categories": 4,
+          "description": "Product category"
+        },
+        "page_type": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 8,
+          "description": "Type of page"
+        },
+        "age": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 6,
+          "description": "User age category"
+        },
+        "gender": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 3,
+          "description": "User gender"
+        },
+        "region": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 10,
+          "description": "User region"
+        },
+        "product_body_part": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 20,
+          "description": "Body part category for product"
+        },
+        "product_gender": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 3,
+          "description": "Gender category for product"
+        },
+        "product_age_desc": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 6,
+          "description": "Age description for product"
+        },
+        "product_taxonomy_id": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 100,
+          "description": "Taxonomy ID for product"
+        },
+        "anchor_body_part": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 20,
+          "description": "Body part category for anchor"
+        },
+        "anchor_gender": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 3,
+          "description": "Gender category for anchor"
+        },
+        "anchor_age_desc": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 6,
+          "description": "Age description for anchor"
+        },
+        "anchor_taxonomy_id": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 100,
+          "description": "Taxonomy ID for anchor"
+        },
+        "event_dow": {
+          "enabled": true,
+          "type": "categorical",
+          "dim": 1,
+          "num_categories": 7,
+          "description": "Day of week for event"
+        },
+        "anchor_embeds": {
+          "enabled": true,
+          "type": "pretrained_embedding",
+          "dim": 64,
+          "description": "Anchor embeddings"
+        }
+      }
+    },
+    "model": {
+      "architecture": "dcn_v2",
+      "dcn_config": {
+        "cross_layers": 3,
+        "num_heads": 3,
+        "hidden_layers": [
+          512,
+          256,
+          128
+        ],
+        "task_hidden_layers": [
+          64,
+          32
+        ],
+        "dropout_rate": 0.19110147410584094,
+        "activation": "gelu",
+        "use_batch_norm": false,
+        "use_layer_norm": true,
+        "cross_dropout": 0.14690701254124097,
+        "stochastic_depth_rate": 0.10184071654379061,
+        "feature_dropout": 0.06568444144322821,
+        "layer_wise_lr_decay": 0.9
+      }
+    },
+    "training": {
+      "optimizer": {
+        "name": "adamw",
+        "learning_rate": 0.0007780655533345329,
+        "weight_decay": 0.0055244171357912404,
+        "beta1": 0.9,
+        "beta2": 0.999,
+        "layer_wise_lr": true
+      },
+      "scheduler": {
+        "enabled": true,
+        "type": "cosine",
+        "warmup_steps": 5,
+        "min_lr": 1e-06,
+        "num_cycles": 3,
+        "warmup_ratio": 0.1,
+        "cycle_decay": 0.1
+      },
+      "training_config": {
+        "batch_size": 32,
+        "num_epochs": 30,
+        "train_split": 0.8,
+        "validation_split": 0.1,
+        "test_split": 0.1,
+        "early_stopping": 5,
+        "early_stopping_patience": 3,
+        "early_stopping_min_delta": "1e-4",
+        "gradient_clipping": 1.0,
+        "mixed_precision": true,
+        "gradient_centralization": true,
+        "manifold_mixup": true,
+        "mixup_alpha": 0.2,
+        "eval_frequency": 100,
+        "save_best_k": 3,
+        "accumulate_grad_batches": 1
+      }
+    },
+    "tasks": {
+      "click": {
+        "enabled": true,
+        "weight": 0.4,
+        "loss": "bce",
+        "metrics": [
+          "auc",
+          "accuracy",
+          "precision",
+          "recall",
+          "ndcg",
+          "mrr",
+          "map",
+          "precision_at_k",
+          "recall_at_k"
+        ],
+        "description": "Click prediction"
+      },
+      "purchase": {
+        "enabled": true,
+        "weight": 0.4,
+        "loss": "bce",
+        "metrics": [
+          "auc",
+          "accuracy",
+          "precision",
+          "recall",
+          "ndcg",
+          "mrr",
+          "map",
+          "precision_at_k",
+          "recall_at_k"
+        ],
+        "description": "Purchase prediction"
+      },
+      "add_to_cart": {
+        "enabled": true,
+        "weight": 0.2,
+        "loss": "bce",
+        "metrics": [
+          "auc",
+          "accuracy",
+          "precision",
+          "recall",
+          "ndcg",
+          "mrr",
+          "map",
+          "precision_at_k",
+          "recall_at_k"
+        ],
+        "description": "Add to cart prediction"
+      }
+    },
+    "logging": {
+      "wandb": {
+        "enabled": false,
+        "project": "reranker",
+        "entity": "commerce-ds"
+      },
+      "tensorboard": {
+        "enabled": true,
+        "log_dir": "logs/tensorboard"
+      },
+      "checkpointing": {
+        "save_best": true,
+        "save_frequency": 5,
+        "max_checkpoints": 3
+      }
+    },
+    "data": {
+      "input": {
+        "max_sequence_length": 50,
+        "padding_value": 0,
+        "truncation": "right"
+      },
+      "augmentation": {
+        "enabled": false,
+        "sequence_masking_prob": 0.15,
+        "feature_dropout": 0.1
+      },
+      "sampling": {
+        "negative_sampling_ratio": 3,
+        "max_samples_per_user": 100
+      }
+    },
+    "paths": {
+      "model_save_dir": "models/",
+      "best_model_path": "models/best_model.pth",
+      "log_dir": "logs/"
+    },
+    "device": "cpu",
+    "hyperparameter_tuning": {
+      "enabled": true,
+      "strategy": {
+        "name": "optuna",
+        "n_trials": 5,
+        "timeout_hours": 1,
+        "n_jobs": -1
+      },
+      "cross_validation": {
+        "n_splits": 2,
+        "shuffle": true,
+        "stratify": true
+      },
+      "optimization_metric": "click_ndcg@10",
+      "secondary_metrics": [
+        "click_mrr",
+        "click_map@10"
+      ],
+      "parameter_space": {
+        "model.dcn_config.cross_layers": {
+          "type": "int",
+          "range": [
+            2,
+            3
+          ]
+        },
+        "model.dcn_config.num_heads": {
+          "type": "int",
+          "range": [
+            2,
+            4
+          ]
+        },
+        "model.dcn_config.hidden_layers": {
+          "type": "categorical",
+          "values": [
+            [
+              256,
+              128,
+              64
+            ],
+            [
+              512,
+              256,
+              128
+            ]
+          ]
+        },
+        "model.dcn_config.dropout_rate": {
+          "type": "float",
+          "range": [
+            0.1,
+            0.2
+          ],
+          "log": false
+        },
+        "model.dcn_config.cross_dropout": {
+          "type": "float",
+          "range": [
+            0.1,
+            0.2
+          ],
+          "log": false
+        },
+        "model.dcn_config.stochastic_depth_rate": {
+          "type": "float",
+          "range": [
+            0.1,
+            0.2
+          ],
+          "log": false
+        },
+        "model.dcn_config.feature_dropout": {
+          "type": "float",
+          "range": [
+            0.05,
+            0.1
+          ],
+          "log": false
+        },
+        "training.optimizer.learning_rate": {
+          "type": "float",
+          "range": [
+            0.0005,
+            0.002
+          ],
+          "log": true
+        },
+        "training.optimizer.weight_decay": {
+          "type": "float",
+          "range": [
+            0.005,
+            0.02
+          ],
+          "log": true
+        }
+      },
+      "early_stopping": {
+        "patience": 3,
+        "min_delta": 0.001
+      },
+      "resources": {
+        "max_memory_gb": 32,
+        "gpu_ids": [
+          0
+        ]
+      },
+      "checkpointing": {
+        "save_top_k": 2,
+        "save_frequency": 2,
+        "checkpoint_dir": "hp_tuning_checkpoints"
+      }
+    }
+  }
+}

@@ -14,39 +14,26 @@ pip install -r requirements.txt
 
 ### Basic Usage
 
-1. Prepare your input features in the following format:
-
-   **User Features:**
-   - User embeddings (als_user_embeds_binary): Binary embeddings from ALS
-   - Demographics: age, gender, geo, region
-   - User behavior: click, atc (add to cart), purchase, loose_atc, loose_purch
-   - Age bins: age_bins, age_bins_double
-   - Anonymous flag: anon_flag
-   
-   **Product Features:**
-   - Product embeddings (als_prod_embeds_binary): Binary embeddings from ALS
-   - Product metadata: product_gender, product_body_part
-   - Taxonomy: product_taxonomy_id
-   - Age descriptors: product_age_desc
-   
-   **Interaction Features:**
-   - Style information: style_code, style_color
-   - Anchor information: anchor_style, anchor_body_part, anchor_gender, anchor_taxonomy_id
-   - Position features: position_in_carousel
-   - Event data: event_date, event_timestamp, event_dow
-   - Experience type and page details: experience_type, page_type, page_detail
-   
-   **System Features:**
-   - Build information: app_build, app_version
-   - System details: os_name, os_version
-   - Raw UPM ID: raw_upm_id
+1. Prepare your embeddings data in the following format:
+   - Product embeddings: shape (n_samples, product_embed_dim)
+   - User embeddings: shape (n_samples, user_embed_dim)
+   - Geo embeddings: shape (n_samples, geo_embed_dim)
+   - Country embeddings: shape (n_samples, country_embed_dim)
+   - Labels: shape (n_samples, 1) with binary values
 
 2. Create a model instance:
 
 ```python
 from src.models.dcn import DCNv2
 
-model = DCNv2(config)  # See config.yml for full configuration options
+model = DCNv2(
+    product_embed_dim=128,
+    user_embed_dim=64,
+    geo_embed_dim=32,
+    country_embed_dim=32,
+    num_cross_layers=3,
+    hidden_layers=[256, 128, 64]
+)
 ```
 
 3. Create datasets and data loaders:
@@ -55,7 +42,13 @@ model = DCNv2(config)  # See config.yml for full configuration options
 from torch.utils.data import DataLoader
 from src.main import ReRankerDataset
 
-train_dataset = ReRankerDataset(features, labels, config)
+train_dataset = ReRankerDataset(
+    product_embeds,
+    user_embeds,
+    geo_embeds,
+    country_embeds,
+    labels
+)
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 ```
 
@@ -78,81 +71,74 @@ Below is a detailed architecture diagram of the DCN v2 Re-ranker:
 
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                              Input Features                                      │
-├───────────┬───────────┬────────────┬──────────┬───────────┬──────────┬────────┤
-│  User     │ Product   │ Style &    │ Anchor   │  Event    │ Page &   │ System │
-│ Features  │ Features  │ Position   │ Features │  Data     │  Exp.    │  Info  │
-└─────┬─────┴────┬─────┴─────┬──────┴────┬─────┴─────┬─────┴────┬─────┴───┬────┘
-      │          │           │            │           │          │         │
-      ▼          ▼           ▼            ▼           ▼          ▼         ▼
-┌──────────┐ ┌─────────┐ ┌──────────┐ ┌─────────┐ ┌───────┐ ┌────────┐ ┌─────┐
-│ User     │ │ Product │ │ Style    │ │ Anchor  │ │ Event │ │ Page   │ │ Sys  │
-│ Embedder │ │ Embedder│ │ Encoder  │ │ Encoder │ │ Proc. │ │ Proc.  │ │ Proc.│
-└────┬─────┘ └────┬────┘ └────┬─────┘ └────┬────┘ └───┬───┘ └───┬────┘ └──┬──┘
-     │           │           │           │           │         │         │
-     └───────────┴───────────┴───────────┴───────────┴─────────┴─────────┘
-                                        │
-                                        ▼
-                           ┌────────────────────────┐
-                           │   Feature Fusion       │
-                           │   & Normalization     │
-                           └──────────┬────────────┘
-                                     │
-                                     ▼
-                    ┌────────────────────────────────┐
-                    │      Combined Features         │
-                    └──────────────┬─────────────────┘
-                                  │
-                   ┌──────────────┴──────────────┐
-                   ▼                             ▼
-         ┌──────────────────┐         ┌───────────────────┐
-         │  Cross Network   │         │   Deep Network    │
-         │                  │         │                   │
-         │ Feature Crossing │         │ Non-linear       │
-         │ (Low-rank DCN)   │         │ Patterns (MLP)   │
-         └────────┬─────────┘         └────────┬────────┘
-                 │                             │
-                 └──────────────┬─────────────┘
-                               │
-                               ▼
-                     ┌───────────────────┐
-                     │  Feature Fusion   │
-                     │  & Combination    │
-                     └────────┬──────────┘
-                              │
-                              ▼
-                     ┌───────────────────┐
-                     │   Task Heads      │
-                     └────────┬──────────┘
-                              │
-                 ┌────────────┼────────────┐
-                 ▼            ▼            ▼
-          ┌──────────┐  ┌──────────┐  ┌──────────┐
-          │  Click   │  │ Purchase │  │ Add to   │
-          │  Score   │  │  Score   │  │  Cart    │
-          └──────────┘  └──────────┘  └──────────┘
+├───────────────┬───────────────┬────────────────┬──────────────┬───────────────┤
+│   Product     │    User       │     Geo        │  Country     │  Interaction   │
+│  Embeddings   │  Embeddings   │   Features     │  Features    │   History     │
+└───────┬───────┴───────┬───────┴───────┬────────┴──────┬───────┴───────┬───────┘
+        │               │               │                │               │
+        ▼               ▼               ▼                ▼               ▼
+┌───────────────┐ ┌─────────────┐ ┌──────────────┐ ┌──────────────┐ ┌───────────┐
+│   Feature     │ │  Feature    │ │    Text      │ │    Text      │ │ Sequence  │
+│  Processing   │ │ Processing  │ │  Embedder    │ │  Embedder    │ │ Encoder   │
+└───────┬───────┘ └─────┬───────┘ └──────┬───────┘ └──────┬───────┘ └─────┬─────┘
+        │               │                 │                │               │
+        └───────────────┴─────────────────┴────────┬──────┴───────────────┘
+                                                  │
+                                                  ▼
+                                     ┌────────────────────────┐
+                                     │   Feature Fusion       │
+                                     │   & Normalization     │
+                                     └──────────┬────────────┘
+                                                │
+                                                ▼
+                               ┌────────────────────────────────┐
+                               │      Combined Features         │
+                               └──────────────┬─────────────────┘
+                                             │
+                              ┌──────────────┴──────────────┐
+                              ▼                             ▼
+                    ┌──────────────────┐         ┌───────────────────┐
+                    │  Cross Network   │         │   Deep Network    │
+                    │                  │         │                   │
+                    │ Feature Crossing │         │ Non-linear       │
+                    │ (Low-rank DCN)   │         │ Patterns (MLP)   │
+                    └────────┬─────────┘         └────────┬────────┘
+                            │                             │
+                            └──────────────┬─────────────┘
+                                          │
+                                          ▼
+                                ┌───────────────────┐
+                                │  Feature Fusion   │
+                                │  & Combination    │
+                                └────────┬──────────┘
+                                         │
+                                         ▼
+                                ┌───────────────────┐
+                                │   Task Heads      │
+                                └────────┬──────────┘
+                                         │
+                            ┌────────────┼────────────┐
+                            ▼            ▼            ▼
+                     ┌──────────┐  ┌──────────┐  ┌──────────┐
+                     │  Click   │  │ Purchase │  │ Add to   │
+                     │  Score   │  │  Score   │  │  Cart    │
+                     └──────────┘  └──────────┘  └──────────┘
 ```
 
-The architecture processes these features through specialized components:
+The architecture consists of several key components:
 
-1. **Feature Processing Layer**:
-   - User Embedder: Processes user embeddings and demographic data
-   - Product Embedder: Handles product embeddings and metadata
-   - Style Encoder: Processes style and position features
-   - Anchor Encoder: Handles anchor-related features
-   - Event Processor: Processes temporal and event data
-   - Page Processor: Handles page and experience features
-   - System Processor: Processes system and build information
+1. **Input Features**: Multiple types of input features including product embeddings, user embeddings, geographical features, and interaction history.
 
-2. **Feature Fusion**:
-   - Combines all processed features
-   - Applies normalization and feature alignment
-   - Creates a unified representation
+2. **Feature Processing**: Each input type goes through specific processing:
+   - Embeddings are processed through feature layers
+   - Text features are processed through transformer-based embedders
+   - Sequential data is handled by a dedicated sequence encoder
 
 3. **Core Architecture**:
-   - Cross Network: Models explicit feature interactions
-   - Deep Network: Captures complex non-linear patterns
+   - Cross Network: Efficiently models feature interactions using low-rank DCN
+   - Deep Network: Captures complex patterns using deep MLP with skip connections
 
-4. **Task Heads**:
+4. **Task Heads**: Multiple prediction heads for different tasks:
    - Click prediction
    - Purchase prediction
    - Add-to-cart prediction

@@ -1,0 +1,689 @@
+import torch
+import torch.nn as nn
+from torch.cuda.amp import autocast
+from typing import Dict, List, Any, Tuple
+import logging
+from pathlib import Path
+import os
+from torch.utils.tensorboard import SummaryWriter
+import wandb
+from tqdm import tqdm
+import numpy as np
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score
+from torch.utils.data import DataLoader
+import torch.nn.functional as F
+
+from ..training.evaluate import (
+    compute_ndcg,
+    compute_map,
+    compute_precision_at_k,
+    compute_recall_at_k
+)
+
+def compute_ndcg(y_true: np.ndarray, y_pred: np.ndarray, k: int = None) -> float:
+    """Compute Normalized Discounted Cumulative Gain."""
+    if k is None:
+        k = y_true.shape[0]
+    
+    # Get sorting indices in descending order of predictions
+    pred_indices = np.argsort(y_pred)[::-1]
+    
+    # Calculate DCG
+    dcg = np.sum([
+        (2 ** y_true[idx] - 1) / np.log2(rank + 2)
+        for rank, idx in enumerate(pred_indices[:k])
+    ])
+    
+    # Calculate IDCG
+    ideal_indices = np.argsort(y_true)[::-1]
+    idcg = np.sum([
+        (2 ** y_true[idx] - 1) / np.log2(rank + 2)
+        for rank, idx in enumerate(ideal_indices[:k])
+    ])
+    
+    return dcg / idcg if idcg > 0 else 0.0
+
+def compute_mrr(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Compute Mean Reciprocal Rank."""
+    # Get sorting indices in descending order of predictions
+    pred_indices = np.argsort(y_pred)[::-1]
+    
+    # Find the rank of the first relevant item
+    for rank, idx in enumerate(pred_indices):
+        if y_true[idx] == 1:
+            return 1.0 / (rank + 1)
+    return 0.0
+
+def compute_precision_at_k(y_true: np.ndarray, y_pred: np.ndarray, k: int) -> float:
+    """Compute Precision@k for binary relevance."""
+    # Get top k indices
+    top_k_indices = np.argsort(y_pred)[::-1][:k]
+    # Count relevant items in top k
+    return np.mean(y_true[top_k_indices])
+
+def compute_average_precision(y_true: np.ndarray, y_pred: np.ndarray, k: int = None) -> float:
+    """Compute Average Precision (AP) for binary relevance."""
+    if k is None:
+        k = len(y_true)
+    
+    # Get sorting indices in descending order
+    pred_indices = np.argsort(y_pred)[::-1][:k]
+    
+    # Calculate precision at each position where a relevant item was found
+    precisions = []
+    num_relevant = 0
+    
+    for i, idx in enumerate(pred_indices):
+        if y_true[idx] == 1:
+            num_relevant += 1
+            precisions.append(num_relevant / (i + 1))
+    
+    if not precisions:  # No relevant items found
+        return 0.0
+    
+    return np.mean(precisions)
+
+def compute_map_at_k(y_true: np.ndarray, y_pred: np.ndarray, k: int) -> float:
+    """Compute Mean Average Precision at k (MAP@k)."""
+    if len(y_true.shape) == 1:
+        return compute_average_precision(y_true, y_pred, k)
+    
+    # For multiple queries
+    aps = []
+    for i in range(len(y_true)):
+        ap = compute_average_precision(y_true[i], y_pred[i], k)
+        aps.append(ap)
+    return np.mean(aps)
+
+def compute_recall_at_k(y_true: np.ndarray, y_pred: np.ndarray, k: int) -> float:
+    """Compute Recall@k for binary relevance."""
+    # Get top k indices
+    top_k_indices = np.argsort(y_pred)[::-1][:k]
+    # Count relevant items in top k
+    num_relevant_in_top_k = np.sum(y_true[top_k_indices])
+    # Total number of relevant items
+    total_relevant = np.sum(y_true)
+    
+    if total_relevant == 0:
+        return 0.0
+    
+    return num_relevant_in_top_k / total_relevant
+
+class ReRankerTrainer:
+    def __init__(
+        self,
+        model: nn.Module,
+        config: Dict,
+        optimizer: torch.optim.Optimizer,
+        scheduler=None,
+        device=None
+    ):
+        self.model = model
+        self.config = config
+        self.optimizer = optimizer
+        self.scheduler = scheduler
+        self.device = device or torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        
+        # Get enabled tasks and their weights
+        self.tasks = [task for task, spec in config['tasks'].items() if spec['enabled']]
+        self.task_weights = {
+            task: spec['weight']
+            for task, spec in config['tasks'].items()
+            if spec['enabled']
+        }
+        
+        # Setup mixed precision training
+        self.scaler = torch.cuda.amp.GradScaler() if config['training']['training_config']['mixed_precision'] else None
+        
+        # Setup logging
+        self.setup_logging()
+        
+        # Initialize early stopping
+        self.best_val_loss = float('inf')
+        self.best_val_metrics = {}
+        self.patience_counter = 0
+        self.best_epochs = []
+        self.min_delta = float(config['training']['training_config'].get('early_stopping_min_delta', 1e-4))
+        self.patience = int(config['training']['training_config'].get('early_stopping_patience', 3))
+        
+        # Initialize loss function for each task
+        self.loss_fns = {}
+        for task in self.tasks:
+            loss_type = config['tasks'][task]['loss'].lower()
+            if loss_type == 'bce':
+                self.loss_fns[task] = nn.BCELoss()  # Using BCELoss since we apply sigmoid in model
+            else:
+                raise ValueError(f"Unsupported loss type: {loss_type}")
+    
+    def setup_logging(self):
+        """Setup logging and monitoring tools."""
+        if self.config['logging']['tensorboard']['enabled']:
+            log_dir = Path(self.config['logging']['tensorboard']['log_dir'])
+            log_dir.mkdir(parents=True, exist_ok=True)
+            self.writer = SummaryWriter(log_dir)
+        else:
+            self.writer = None
+            
+        if self.config['logging']['wandb']['enabled']:
+            wandb.init(
+                project=self.config['logging']['wandb']['project'],
+                entity=self.config['logging']['wandb']['entity'],
+                config=self.config
+            )
+        
+        # Setup checkpointing directory
+        if self.config['logging']['checkpointing']['save_best']:
+            checkpoint_dir = Path(self.config['paths']['model_save_dir'])
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            self.checkpoint_dir = checkpoint_dir
+    
+    def compute_metrics(
+        self,
+        outputs: Dict[str, torch.Tensor],
+        labels: Dict[str, torch.Tensor]
+    ) -> Dict[str, float]:
+        """Compute metrics for each task."""
+        metrics = {}
+        
+        for task in self.tasks:
+            if task not in outputs or task not in labels:
+                continue
+                
+            y_pred = outputs[task].cpu().numpy()
+            y_true = labels[task].cpu().numpy()
+            
+            # Compute metrics based on task configuration
+            task_metrics = self.config['tasks'][task]['metrics']
+            
+            for metric in task_metrics:
+                metric_name = f'{task}_{metric}'
+                if metric == 'auc':
+                    metrics[metric_name] = roc_auc_score(y_true, y_pred)
+                elif metric == 'accuracy':
+                    metrics[metric_name] = accuracy_score(y_true, y_pred > 0.5)
+                elif metric == 'precision':
+                    metrics[metric_name] = precision_score(y_true, y_pred > 0.5)
+                elif metric == 'recall':
+                    metrics[metric_name] = recall_score(y_true, y_pred > 0.5)
+                elif metric == 'ndcg':
+                    # Compute NDCG at different K values
+                    for k in [5, 10, 20]:
+                        metrics[f'{metric_name}@{k}'] = compute_ndcg(y_true, y_pred, k=k)
+                elif metric == 'mrr':
+                    metrics[metric_name] = compute_mrr(y_true, y_pred)
+                elif metric == 'map':
+                    # Compute MAP at different K values
+                    for k in [5, 10, 20]:
+                        metrics[f'{metric_name}@{k}'] = compute_map_at_k(y_true, y_pred, k=k)
+                elif metric == 'precision_at_k':
+                    # Compute Precision at different K values
+                    for k in [1, 3, 5, 10]:
+                        metrics[f'{task}_p@{k}'] = compute_precision_at_k(y_true, y_pred, k=k)
+                elif metric == 'recall_at_k':
+                    # Compute Recall at different K values
+                    for k in [5, 10, 20]:
+                        metrics[f'{task}_r@{k}'] = compute_recall_at_k(y_true, y_pred, k=k)
+        
+        return metrics
+    
+    def log_metrics(self, metrics: Dict[str, float], step: int, prefix: str = ''):
+        """Log metrics to all enabled logging tools."""
+        # Log to tensorboard
+        if self.writer is not None:
+            for name, value in metrics.items():
+                self.writer.add_scalar(f"{prefix}{name}", value, step)
+        
+        # Log to wandb
+        if self.config['logging']['wandb']['enabled']:
+            wandb.log({f"{prefix}{k}": v for k, v in metrics.items()}, step=step)
+    
+    def save_checkpoint(self, epoch: int, metrics: Dict[str, float], is_best: bool = False):
+        """Save model checkpoint with comprehensive metrics."""
+        if not self.config['logging']['checkpointing']['save_best'] and not is_best:
+            return
+            
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'metrics': metrics,
+            'best_val_loss': self.best_val_loss,
+            'patience_counter': self.patience_counter,
+            'config': self.config,  # Save config for reproducibility
+            'tasks': self.tasks,
+            'task_weights': self.task_weights
+        }
+        
+        if self.scheduler is not None:
+            checkpoint['scheduler_state_dict'] = self.scheduler.state_dict()
+        
+        # Save regular checkpoint
+        checkpoint_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pt"
+        torch.save(checkpoint, checkpoint_path)
+        
+        # Save best model if needed
+        if is_best:
+            best_model_path = Path(self.config['paths']['best_model_path'])
+            torch.save(checkpoint, best_model_path)
+            
+            # Also save a backup of the best model
+            best_backup_path = best_model_path.parent / f"best_model_backup_epoch_{epoch}.pt"
+            torch.save(checkpoint, best_backup_path)
+        
+        # Remove old checkpoints if needed
+        max_checkpoints = self.config['logging']['checkpointing']['max_checkpoints']
+        checkpoints = sorted(self.checkpoint_dir.glob("checkpoint_*.pt"))
+        if len(checkpoints) > max_checkpoints:
+            for checkpoint in checkpoints[:-max_checkpoints]:
+                checkpoint.unlink()
+    
+    def should_stop_early(self, val_metrics: Dict[str, float], epoch: int) -> bool:
+        """Check if training should stop early."""
+        if self.patience is None:
+            return False
+        
+        # Get validation loss
+        current_val_loss = float(val_metrics['total_loss'])
+        
+        # Update best validation loss
+        if self.best_val_loss is None or current_val_loss < float(self.best_val_loss):
+            self.best_val_loss = current_val_loss
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+        
+        # Check if we should stop
+        if self.patience_counter >= self.patience:
+            print(f"\nEarly stopping triggered after {epoch + 1} epochs")
+            return True
+        
+        return False
+    
+    def train_epoch(self, train_loader, epoch: int) -> Dict[str, float]:
+        """Train for one epoch."""
+        self.model.train()
+        total_loss = 0
+        task_losses = {task: 0.0 for task in self.tasks}
+        all_outputs = {task: [] for task in self.tasks}
+        all_labels = {task: [] for task in self.tasks}
+        num_batches = len(train_loader)
+        
+        with tqdm(train_loader, desc=f"Epoch {epoch}") as pbar:
+            for batch_idx, (features, labels) in enumerate(pbar):
+                # Move features to device
+                features = {
+                    name: value.to(self.device) if isinstance(value, torch.Tensor)
+                    else (tuple(v.to(self.device) for v in value) if isinstance(value, tuple)
+                          else value)
+                    for name, value in features.items()
+                }
+                labels = {name: label.to(self.device) for name, label in labels.items()}
+                
+                # Zero gradients
+                self.optimizer.zero_grad()
+                
+                # Forward pass with mixed precision if enabled
+                if self.scaler is not None:
+                    with autocast():
+                        outputs = self.model(features)
+                        loss = 0
+                        for task in self.tasks:
+                            task_loss = self.loss_fns[task](outputs[task], labels[task])
+                            loss += self.task_weights[task] * task_loss
+                            task_losses[task] += task_loss.item()
+                    
+                    # Backward pass with gradient scaling
+                    self.scaler.scale(loss).backward()
+                    
+                    # Gradient clipping if enabled
+                    if self.config['training']['training_config']['gradient_clipping'] > 0:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['training_config']['gradient_clipping']
+                        )
+                    
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    # Standard forward pass
+                    outputs = self.model(features)
+                    loss = 0
+                    for task in self.tasks:
+                        task_loss = self.loss_fns[task](outputs[task], labels[task])
+                        loss += self.task_weights[task] * task_loss
+                        task_losses[task] += task_loss.item()
+                    
+                    # Standard backward pass
+                    loss.backward()
+                    
+                    # Gradient clipping if enabled
+                    if self.config['training']['training_config']['gradient_clipping'] > 0:
+                        torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            self.config['training']['training_config']['gradient_clipping']
+                        )
+                    
+                    self.optimizer.step()
+                
+                # Update learning rate
+                if self.scheduler is not None:
+                    self.scheduler.step()
+                
+                # Collect outputs and labels for metrics
+                for task in self.tasks:
+                    if task in outputs and task in labels:
+                        all_outputs[task].append(outputs[task].detach())
+                        all_labels[task].append(labels[task])
+                
+                # Update total loss
+                total_loss += loss.item()
+                avg_loss = total_loss / (batch_idx + 1)
+                pbar.set_postfix({'loss': f'{avg_loss:.4f}'})
+        
+        # Compute epoch metrics
+        epoch_metrics = {}
+        for task in self.tasks:
+            if len(all_outputs[task]) > 0 and len(all_labels[task]) > 0:
+                task_outputs = torch.cat(all_outputs[task])
+                task_labels = torch.cat(all_labels[task])
+                task_metrics = self.compute_metrics(
+                    {task: task_outputs},
+                    {task: task_labels}
+                )
+                epoch_metrics.update(task_metrics)
+                epoch_metrics[f'{task}_loss'] = task_losses[task] / num_batches
+        
+        epoch_metrics['total_loss'] = total_loss / num_batches
+        return epoch_metrics
+    
+    def validate(self, val_loader) -> Dict[str, float]:
+        """Validate the model."""
+        self.model.eval()
+        total_loss = 0
+        task_losses = {task: 0.0 for task in self.tasks}
+        all_outputs = {task: [] for task in self.tasks}
+        all_labels = {task: [] for task in self.tasks}
+        num_batches = len(val_loader)
+        
+        with torch.no_grad():
+            with tqdm(val_loader, desc="Validation") as pbar:
+                for batch_idx, (features, labels) in enumerate(pbar):
+                    # Move features to device
+                    features = {
+                        name: value.to(self.device) if isinstance(value, torch.Tensor)
+                        else (tuple(v.to(self.device) for v in value) if isinstance(value, tuple)
+                              else value)
+                        for name, value in features.items()
+                    }
+                    labels = {name: label.to(self.device) for name, label in labels.items()}
+                    
+                    # Forward pass
+                    outputs = self.model(features)
+                    loss = 0
+                    for task in self.tasks:
+                        task_loss = self.loss_fns[task](outputs[task], labels[task])
+                        loss += self.task_weights[task] * task_loss
+                        task_losses[task] += task_loss.item()
+                        
+                        all_outputs[task].append(outputs[task])
+                        all_labels[task].append(labels[task])
+                    
+                    # Update total loss
+                    total_loss += loss.item()
+                    avg_loss = total_loss / (batch_idx + 1)
+                    if pbar:
+                        pbar.set_postfix({'loss': f'{avg_loss:.4f}'})
+        
+        # Compute validation metrics
+        val_metrics = {}
+        for task in self.tasks:
+            if len(all_outputs[task]) > 0 and len(all_labels[task]) > 0:
+                task_outputs = torch.cat(all_outputs[task])
+                task_labels = torch.cat(all_labels[task])
+                task_metrics = self.compute_metrics(
+                    {task: task_outputs},
+                    {task: task_labels}
+                )
+                val_metrics.update(task_metrics)
+                val_metrics[f'{task}_loss'] = task_losses[task] / num_batches
+        
+        val_metrics['total_loss'] = total_loss / num_batches
+        return val_metrics
+    
+    def train(
+        self,
+        train_loader,
+        val_loader=None,
+        early_stopping_patience=None,
+        early_stopping_min_delta=None
+    ) -> float:
+        """Train the model.
+        
+        Args:
+            train_loader: DataLoader for training data
+            val_loader: Optional DataLoader for validation data
+            early_stopping_patience: Number of epochs to wait for improvement before stopping
+            early_stopping_min_delta: Minimum change in validation metric to qualify as an improvement
+            
+        Returns:
+            float: Best validation metric achieved (or final training metric if no validation)
+        """
+        num_epochs = self.config['training']['training_config']['num_epochs']
+        
+        # Override early stopping parameters if provided
+        if early_stopping_patience is not None:
+            self.patience = early_stopping_patience
+        if early_stopping_min_delta is not None:
+            self.min_delta = early_stopping_min_delta
+        
+        best_metric = float('-inf')
+        best_epoch = 0
+        
+        for epoch in range(num_epochs):
+            # Train for one epoch
+            train_metrics = self.train_epoch(train_loader, epoch)
+            
+            # Log training metrics
+            self.log_metrics(train_metrics, epoch, prefix='train/')
+            
+            # Validate if we have a validation loader
+            if val_loader is not None:
+                val_metrics = self.validate(val_loader)
+                self.log_metrics(val_metrics, epoch, prefix='val/')
+                
+                # Get the metric we're optimizing for
+                current_metric = val_metrics.get(
+                    self.config.get('hyperparameter_tuning', {}).get('optimization_metric', 'ndcg@10'),
+                    val_metrics.get('click_ndcg@10', val_metrics.get('click_auc', None))  # Fallback metrics
+                )
+                
+                if current_metric is not None and current_metric > best_metric:
+                    best_metric = current_metric
+                    best_epoch = epoch
+                    # Save best model
+                    self.save_checkpoint(epoch, val_metrics, is_best=True)
+                
+                # Early stopping check
+                if self.should_stop_early(val_metrics, epoch):
+                    print(f"\nEarly stopping triggered at epoch {epoch}")
+                    break
+            else:
+                # If no validation, use training metrics
+                current_metric = train_metrics.get('click_ndcg@10', train_metrics.get('click_auc', None))
+                if current_metric is not None and current_metric > best_metric:
+                    best_metric = current_metric
+                    best_epoch = epoch
+            
+            # Step the scheduler if it exists
+            if self.scheduler is not None:
+                self.scheduler.step()
+        
+        if val_loader is not None:
+            print(f"\nBest validation metric: {best_metric:.4f} at epoch {best_epoch}")
+        
+        return best_metric
+
+    def evaluate(self, dataloader: DataLoader) -> Dict[str, Dict[str, float]]:
+        """
+        Evaluate model on a dataset.
+        
+        Args:
+            dataloader: DataLoader for evaluation data
+            
+        Returns:
+            Dictionary of metrics for each task
+        """
+        self.model.eval()
+        all_outputs = {}
+        all_labels = {}
+        total_loss = 0.0
+        num_batches = 0
+        
+        # Get enabled tasks
+        tasks = [task for task, spec in self.config['tasks'].items() if spec['enabled']]
+        
+        # Initialize outputs and labels
+        for task in tasks:
+            all_outputs[task] = []
+            all_labels[task] = []
+        
+        with torch.no_grad():
+            for batch_features, batch_labels in dataloader:
+                # Move features to device
+                features = {
+                    name: value.to(self.device) if isinstance(value, torch.Tensor)
+                    else value
+                    for name, value in batch_features.items()
+                }
+                
+                # Move labels to device
+                labels = {
+                    name: value.to(self.device)
+                    for name, value in batch_labels.items()
+                }
+                
+                # Get predictions
+                outputs = self.model(features)
+                
+                # Compute loss
+                loss = self.compute_loss(outputs, labels)
+                total_loss += loss.item()
+                num_batches += 1
+                
+                # Collect outputs and labels
+                for task in tasks:
+                    if task in outputs and task in batch_labels:
+                        all_outputs[task].append(outputs[task].cpu().numpy())
+                        all_labels[task].append(batch_labels[task].cpu().numpy())
+        
+        # Concatenate predictions and labels
+        for task in tasks:
+            if len(all_outputs[task]) > 0:
+                all_outputs[task] = np.concatenate(all_outputs[task])
+                all_labels[task] = np.concatenate(all_labels[task])
+        
+        # Compute metrics
+        metrics = {}
+        for task in tasks:
+            if len(all_outputs[task]) == 0:
+                continue
+                
+            task_metrics = {}
+            y_true = all_labels[task]
+            y_pred = all_outputs[task]
+            
+            # AUC
+            try:
+                task_metrics['auc'] = roc_auc_score(y_true, y_pred)
+            except:
+                task_metrics['auc'] = 0.0
+            
+            # NDCG at different k
+            for k in [5, 10, 20]:
+                task_metrics[f'ndcg@{k}'] = compute_ndcg(y_true, y_pred, k=k)
+            
+            # MAP at different k
+            for k in [5, 10, 20]:
+                task_metrics[f'map@{k}'] = compute_map(y_true, y_pred, k=k)
+            
+            # Precision at different k
+            for k in [1, 3, 5, 10]:
+                task_metrics[f'p@{k}'] = compute_precision_at_k(y_true, y_pred, k=k)
+            
+            # Recall at different k
+            for k in [5, 10, 20]:
+                task_metrics[f'r@{k}'] = compute_recall_at_k(y_true, y_pred, k=k)
+            
+            metrics[task] = task_metrics
+        
+        # Add total loss
+        metrics['total_loss'] = total_loss / num_batches
+        
+        return metrics
+
+    def compute_loss(self, outputs: Dict[str, torch.Tensor], labels: Dict[str, torch.Tensor]) -> torch.Tensor:
+        """
+        Compute loss for all enabled tasks.
+        
+        Args:
+            outputs: Dictionary of model outputs
+            labels: Dictionary of ground truth labels
+            
+        Returns:
+            Total loss
+        """
+        total_loss = 0.0
+        
+        # Compute loss for each task
+        for task, spec in self.config['tasks'].items():
+            if not spec['enabled']:
+                continue
+                
+            if task not in outputs or task not in labels:
+                continue
+                
+            # Get task-specific loss function
+            loss_fn = nn.BCEWithLogitsLoss(
+                pos_weight=torch.tensor([spec['pos_weight']], device=self.device)
+            ) if spec.get('pos_weight') else nn.BCEWithLogitsLoss()
+            
+            # Compute task loss
+            task_loss = loss_fn(outputs[task], labels[task])
+            
+            # Apply task weight
+            task_weight = spec.get('weight', 1.0)
+            total_loss += task_weight * task_loss
+        
+        return total_loss
+
+    def _compute_loss(self, outputs: Dict[str, torch.Tensor], labels: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
+        """Compute the total loss and individual task losses."""
+        task_losses = {}
+        total_loss = 0.0
+        
+        # Compute task-specific losses
+        for task_name, task_config in self.config['tasks'].items():
+            if not task_config['enabled']:
+                continue
+            
+            if task_config['loss'] == 'bce':
+                task_loss = F.binary_cross_entropy(
+                    outputs[task_name],
+                    labels[task_name].float()
+                )
+            else:
+                raise ValueError(f"Unsupported loss type: {task_config['loss']}")
+            
+            weighted_loss = task_loss * task_config['weight']
+            task_losses[task_name] = task_loss.item()
+            total_loss += weighted_loss
+        
+        # Add MoE loss if present
+        if 'moe_loss' in outputs:
+            moe_weight = self.config['model'].get('moe_config', {}).get('loss_weight', 0.01)
+            moe_loss = outputs['moe_loss'] * moe_weight
+            total_loss += moe_loss
+            task_losses['moe'] = moe_loss.item()
+        
+        return total_loss, task_losses 
