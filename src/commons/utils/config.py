@@ -74,7 +74,7 @@ def validate_model_config(model_config: Dict[str, Any]) -> None:
     if 'architecture' not in model_config:
         raise ValueError("Missing 'architecture' in model configuration")
         
-    if model_config['architecture'] != 'dcn_v2':
+    if model_config['architecture'] not in ['dcn_v2', 'dcn_v2_moe']:
         raise ValueError(f"Unsupported model architecture: {model_config['architecture']}")
         
     if 'dcn_config' not in model_config:
@@ -104,35 +104,47 @@ def validate_model_config(model_config: Dict[str, Any]) -> None:
         
     if dcn_config['stochastic_depth_rate'] < 0 or dcn_config['stochastic_depth_rate'] > 1:
         raise ValueError("Stochastic depth rate must be between 0 and 1")
-    
+
     # Validate MoE configuration if enabled
-    if 'moe_config' in model_config:
+    if model_config['architecture'] == 'dcn_v2_moe':
+        if 'moe_config' not in model_config:
+            raise ValueError("Missing 'moe_config' for MoE architecture")
+            
         moe_config = model_config['moe_config']
         required_moe_fields = [
             'enabled',
             'num_experts',
             'expert_hidden_size',
-            'k_experts',  # Number of experts to route to
-            'capacity_factor',  # Multiplicative factor for expert capacity
+            'gating_hidden_size',
+            'load_balancing_loss_weight',
             'expert_dropout',
-            'gating_dropout'
+            'use_region_specific_experts',
+            'knowledge_distillation_weight',
+            'training_stages'
         ]
         
         for field in required_moe_fields:
             if field not in moe_config:
                 raise ValueError(f"Missing required field '{field}' in MoE configuration")
         
-        if moe_config['enabled']:
-            if moe_config['num_experts'] < 1:
-                raise ValueError("Number of experts must be at least 1")
-            if moe_config['k_experts'] < 1 or moe_config['k_experts'] > moe_config['num_experts']:
-                raise ValueError("k_experts must be between 1 and num_experts")
-            if moe_config['capacity_factor'] <= 0:
-                raise ValueError("capacity_factor must be positive")
-            if not 0 <= moe_config['expert_dropout'] <= 1:
-                raise ValueError("expert_dropout must be between 0 and 1")
-            if not 0 <= moe_config['gating_dropout'] <= 1:
-                raise ValueError("gating_dropout must be between 0 and 1")
+        if not isinstance(moe_config['num_experts'], int) or moe_config['num_experts'] < 1:
+            raise ValueError("num_experts must be a positive integer")
+            
+        if moe_config['expert_dropout'] < 0 or moe_config['expert_dropout'] > 1:
+            raise ValueError("expert_dropout must be between 0 and 1")
+            
+        if moe_config['knowledge_distillation_weight'] < 0:
+            raise ValueError("knowledge_distillation_weight must be non-negative")
+            
+        # Validate training stages configuration
+        stages_config = moe_config['training_stages']
+        required_stage_fields = ['global_expert_epochs', 'regional_expert_epochs']
+        
+        for field in required_stage_fields:
+            if field not in stages_config:
+                raise ValueError(f"Missing required field '{field}' in training stages configuration")
+            if not isinstance(stages_config[field], int) or stages_config[field] < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
 
 def validate_training_config(training_config: Dict[str, Any]) -> None:
     """Validate training configuration."""

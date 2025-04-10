@@ -1,11 +1,11 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Dict, Optional, Any, Union, Tuple
+from typing import List, Dict, Optional, Any, Union
 from transformers import AutoModel, AutoTokenizer
 from .sequence_encoder import SequenceEncoder
-from .moe import MixtureOfExperts
 import numpy as np
+from .moe import MixtureOfExperts
 
 class BiasModule(nn.Module):
     def __init__(self, size: int):
@@ -224,12 +224,15 @@ class DCNv2(nn.Module):
         self.to(self.device)
         
         # Initialize MoE if enabled
-        self.moe_enabled = 'moe_config' in config['model'] and config['model']['moe_config']['enabled']
-        if self.moe_enabled:
+        self.use_moe = (
+            config['model']['architecture'] == 'dcn_v2_moe' and 
+            config['model']['moe_config']['enabled']
+        )
+        if self.use_moe:
             self.moe = MixtureOfExperts(
-                input_dim=self._calculate_input_dim(),
-                output_dim=self._calculate_input_dim(),  # Same dimension for residual connection
-                config=config['model']['moe_config']
+                config=config,
+                input_dim=self.config['model']['dcn_config']['hidden_layers'][-1],
+                output_dim=self.config['model']['dcn_config']['hidden_layers'][-1]
             )
     
     def _initialize_embedders(self):
@@ -397,12 +400,6 @@ class DCNv2(nn.Module):
         if self.cross_net is None or self.deep_network is None or self.deep_network.input_dim != input_dim:
             self._initialize_networks(input_dim)
         
-        # Apply MoE if enabled
-        moe_loss = None
-        if self.moe_enabled:
-            moe_out, moe_loss = self.moe(x)
-            x = x + moe_out  # Residual connection
-        
         # Cross network with stochastic depth
         x0 = x
         xl = x
@@ -417,14 +414,20 @@ class DCNv2(nn.Module):
         # Combine cross and deep outputs
         combined = torch.cat([xl, deep_out], dim=1)
         
-        # Task predictions
+        # Apply MoE if enabled
+        moe_losses = {}
+        if self.use_moe:
+            region_ids = features.get('region', None)
+            combined, moe_losses = self.moe(combined, region_ids)
+        
+        # Get task predictions
         predictions = {}
         for task in self.tasks:
             predictions[task] = self.task_networks[task](combined)
         
-        # Add MoE loss if available
-        if moe_loss is not None:
-            predictions['moe_loss'] = moe_loss
+        # Add MoE losses if present
+        if moe_losses:
+            predictions.update(moe_losses)
         
         return predictions
 
@@ -503,16 +506,7 @@ class DCNv2(nn.Module):
             for task in outputs
         }
 
-    def _calculate_input_dim(self) -> int:
-        """Calculate total input dimension based on feature configurations."""
-        total_dim = 0
-        for feature_name, config in self.feature_config.items():
-            if not config['enabled']:
-                continue
-            if config['type'] in ['pretrained_embedding', 'sequence', 'text']:
-                total_dim += config['dim']
-            elif config['type'] == 'numeric':
-                total_dim += 1
-            elif config['type'] == 'categorical':
-                total_dim += config['dim']
-        return total_dim 
+    def set_moe_training_stage(self, stage: str):
+        """Set the training stage for MoE if enabled."""
+        if self.use_moe:
+            self.moe.set_training_stage(stage) 

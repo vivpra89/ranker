@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.cuda.amp import autocast
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 import logging
 from pathlib import Path
 import os
@@ -11,7 +11,6 @@ from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
 
 from ..training.evaluate import (
     compute_ndcg,
@@ -154,6 +153,16 @@ class ReRankerTrainer:
                 self.loss_fns[task] = nn.BCELoss()  # Using BCELoss since we apply sigmoid in model
             else:
                 raise ValueError(f"Unsupported loss type: {loss_type}")
+        
+        # MoE specific settings
+        self.use_moe = (
+            config['model']['architecture'] == 'dcn_v2_moe' and 
+            config['model']['moe_config']['enabled']
+        )
+        if self.use_moe:
+            self.moe_config = config['model']['moe_config']
+            self.global_epochs = self.moe_config['training_stages']['global_expert_epochs']
+            self.regional_epochs = self.moe_config['training_stages']['regional_expert_epochs']
     
     def setup_logging(self):
         """Setup logging and monitoring tools."""
@@ -451,79 +460,71 @@ class ReRankerTrainer:
         val_metrics['total_loss'] = total_loss / num_batches
         return val_metrics
     
-    def train(
-        self,
-        train_loader,
-        val_loader=None,
-        early_stopping_patience=None,
-        early_stopping_min_delta=None
-    ) -> float:
-        """Train the model.
+    def train(self, train_loader, val_loader=None):
+        if self.use_moe:
+            self._train_moe(train_loader, val_loader)
+        else:
+            self._train_standard(train_loader, val_loader)
+    
+    def _train_moe(self, train_loader, val_loader=None):
+        """Two-stage training process for MoE model."""
+        print("\nStage 1: Training Global Expert...")
+        self.model.set_moe_training_stage('global')
+        self._train_standard(
+            train_loader, 
+            val_loader,
+            num_epochs=self.global_epochs,
+            stage_name="Global"
+        )
         
-        Args:
-            train_loader: DataLoader for training data
-            val_loader: Optional DataLoader for validation data
-            early_stopping_patience: Number of epochs to wait for improvement before stopping
-            early_stopping_min_delta: Minimum change in validation metric to qualify as an improvement
-            
-        Returns:
-            float: Best validation metric achieved (or final training metric if no validation)
-        """
-        num_epochs = self.config['training']['training_config']['num_epochs']
+        print("\nStage 2: Training Regional Experts...")
+        self.model.set_moe_training_stage('regional')
+        self._train_standard(
+            train_loader, 
+            val_loader,
+            num_epochs=self.regional_epochs,
+            stage_name="Regional"
+        )
+    
+    def _train_standard(self, train_loader, val_loader=None, num_epochs=None, stage_name=""):
+        """Standard training process."""
+        if num_epochs is None:
+            num_epochs = self.config['training']['training_config']['num_epochs']
         
-        # Override early stopping parameters if provided
-        if early_stopping_patience is not None:
-            self.patience = early_stopping_patience
-        if early_stopping_min_delta is not None:
-            self.min_delta = early_stopping_min_delta
-        
-        best_metric = float('-inf')
-        best_epoch = 0
+        best_val_metric = float('inf')
+        patience = self.config['training']['training_config']['early_stopping']['patience']
+        min_delta = self.config['training']['training_config']['early_stopping']['min_delta']
+        patience_counter = 0
         
         for epoch in range(num_epochs):
-            # Train for one epoch
+            prefix = f"{stage_name} " if stage_name else ""
+            print(f"\n{prefix}Epoch {epoch + 1}/{num_epochs}")
+            
+            # Training
             train_metrics = self.train_epoch(train_loader, epoch)
             
-            # Log training metrics
-            self.log_metrics(train_metrics, epoch, prefix='train/')
-            
-            # Validate if we have a validation loader
+            # Validation
             if val_loader is not None:
-                val_metrics = self.validate(val_loader)
-                self.log_metrics(val_metrics, epoch, prefix='val/')
-                
-                # Get the metric we're optimizing for
-                current_metric = val_metrics.get(
-                    self.config.get('hyperparameter_tuning', {}).get('optimization_metric', 'ndcg@10'),
-                    val_metrics.get('click_ndcg@10', val_metrics.get('click_auc', None))  # Fallback metrics
-                )
-                
-                if current_metric is not None and current_metric > best_metric:
-                    best_metric = current_metric
-                    best_epoch = epoch
-                    # Save best model
-                    self.save_checkpoint(epoch, val_metrics, is_best=True)
+                val_metrics = self.evaluate(val_loader)
+                val_loss = val_metrics['total_loss']
                 
                 # Early stopping check
-                if self.should_stop_early(val_metrics, epoch):
+                if val_loss < best_val_metric - min_delta:
+                    best_val_metric = val_loss
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                
+                if patience_counter >= patience:
+                    print(f"\nEarly stopping triggered after {epoch + 1} epochs")
                     print(f"\nEarly stopping triggered at epoch {epoch}")
+                    print(f"\nBest validation metric: {best_val_metric:.4f} at epoch {epoch - patience}")
                     break
-            else:
-                # If no validation, use training metrics
-                current_metric = train_metrics.get('click_ndcg@10', train_metrics.get('click_auc', None))
-                if current_metric is not None and current_metric > best_metric:
-                    best_metric = current_metric
-                    best_epoch = epoch
             
-            # Step the scheduler if it exists
+            # Step scheduler
             if self.scheduler is not None:
                 self.scheduler.step()
-        
-        if val_loader is not None:
-            print(f"\nBest validation metric: {best_metric:.4f} at epoch {best_epoch}")
-        
-        return best_metric
-
+    
     def evaluate(self, dataloader: DataLoader) -> Dict[str, Dict[str, float]]:
         """
         Evaluate model on a dataset.
@@ -655,35 +656,4 @@ class ReRankerTrainer:
             task_weight = spec.get('weight', 1.0)
             total_loss += task_weight * task_loss
         
-        return total_loss
-
-    def _compute_loss(self, outputs: Dict[str, torch.Tensor], labels: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
-        """Compute the total loss and individual task losses."""
-        task_losses = {}
-        total_loss = 0.0
-        
-        # Compute task-specific losses
-        for task_name, task_config in self.config['tasks'].items():
-            if not task_config['enabled']:
-                continue
-            
-            if task_config['loss'] == 'bce':
-                task_loss = F.binary_cross_entropy(
-                    outputs[task_name],
-                    labels[task_name].float()
-                )
-            else:
-                raise ValueError(f"Unsupported loss type: {task_config['loss']}")
-            
-            weighted_loss = task_loss * task_config['weight']
-            task_losses[task_name] = task_loss.item()
-            total_loss += weighted_loss
-        
-        # Add MoE loss if present
-        if 'moe_loss' in outputs:
-            moe_weight = self.config['model'].get('moe_config', {}).get('loss_weight', 0.01)
-            moe_loss = outputs['moe_loss'] * moe_weight
-            total_loss += moe_loss
-            task_losses['moe'] = moe_loss.item()
-        
-        return total_loss, task_losses 
+        return total_loss 
