@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.cuda.amp import autocast
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import logging
 from pathlib import Path
 import os
@@ -460,41 +460,40 @@ class ReRankerTrainer:
         val_metrics['total_loss'] = total_loss / num_batches
         return val_metrics
     
-    def train(self, train_loader, val_loader=None):
-        if self.use_moe:
-            self._train_moe(train_loader, val_loader)
-        else:
-            self._train_standard(train_loader, val_loader)
-    
-    def _train_moe(self, train_loader, val_loader=None):
-        """Two-stage training process for MoE model."""
-        print("\nStage 1: Training Global Expert...")
-        self.model.set_moe_training_stage('global')
-        self._train_standard(
-            train_loader, 
-            val_loader,
-            num_epochs=self.global_epochs,
-            stage_name="Global"
-        )
-        
-        print("\nStage 2: Training Regional Experts...")
-        self.model.set_moe_training_stage('regional')
-        self._train_standard(
-            train_loader, 
-            val_loader,
-            num_epochs=self.regional_epochs,
-            stage_name="Regional"
-        )
-    
-    def _train_standard(self, train_loader, val_loader=None, num_epochs=None, stage_name=""):
-        """Standard training process."""
-        if num_epochs is None:
-            num_epochs = self.config['training']['training_config']['num_epochs']
-        
+    def train(self, train_loader: DataLoader, val_loader: Optional[DataLoader] = None) -> float:
+        """Train the model."""
         best_val_metric = float('inf')
+        patience_counter = 0
+        
+        # Get number of epochs and patience from config
+        num_epochs = self.config['training']['training_config']['num_epochs']
         patience = self.config['training']['training_config']['early_stopping']['patience']
         min_delta = self.config['training']['training_config']['early_stopping']['min_delta']
+        
+        # Training stages for MoE
+        if self.config['model']['architecture'] == 'dcn_v2_moe' and self.config['model']['moe_config']['enabled']:
+            stage_name = "Stage 1: Training Global Expert"
+            print(f"\n{stage_name}...")
+            global_expert_epochs = self.config['model']['moe_config']['training_stages']['global_expert_epochs']
+            self.model.set_moe_training_stage('global')
+            best_val_metric = self._train_stage(train_loader, val_loader, global_expert_epochs, stage_name)
+            
+            stage_name = "Stage 2: Training Regional Experts"
+            print(f"\n{stage_name}...")
+            regional_expert_epochs = self.config['model']['moe_config']['training_stages']['regional_expert_epochs']
+            self.model.set_moe_training_stage('regional')
+            best_val_metric = min(best_val_metric, self._train_stage(train_loader, val_loader, regional_expert_epochs, stage_name))
+        else:
+            best_val_metric = self._train_stage(train_loader, val_loader, num_epochs)
+        
+        return best_val_metric
+
+    def _train_stage(self, train_loader: DataLoader, val_loader: Optional[DataLoader], num_epochs: int, stage_name: str = "") -> float:
+        """Train for a specific stage (used for both regular training and MoE stages)."""
+        best_val_metric = float('inf')
         patience_counter = 0
+        min_delta = self.config['training']['training_config']['early_stopping']['min_delta']
+        patience = self.config['training']['training_config']['early_stopping']['patience']
         
         for epoch in range(num_epochs):
             prefix = f"{stage_name} " if stage_name else ""
@@ -505,7 +504,7 @@ class ReRankerTrainer:
             
             # Validation
             if val_loader is not None:
-                val_metrics = self.evaluate(val_loader)
+                val_metrics = self.validate(val_loader)
                 val_loss = val_metrics['total_loss']
                 
                 # Early stopping check
@@ -524,7 +523,9 @@ class ReRankerTrainer:
             # Step scheduler
             if self.scheduler is not None:
                 self.scheduler.step()
-    
+        
+        return best_val_metric
+
     def evaluate(self, dataloader: DataLoader) -> Dict[str, Dict[str, float]]:
         """
         Evaluate model on a dataset.

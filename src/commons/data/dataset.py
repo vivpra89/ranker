@@ -54,16 +54,34 @@ class ReRankerDataset(Dataset):
             feature = features[name]
             feature_config = self.feature_config[name]
             
-            if feature_config['type'] == 'pretrained_embedding':
-                self.features[name] = torch.FloatTensor(feature)
-            elif feature_config['type'] == 'binary_embedding':
-                self.features[name] = torch.FloatTensor(feature)
-            elif feature_config['type'] == 'categorical':
-                self.features[name] = torch.LongTensor(feature)
-            elif feature_config['type'] == 'numeric':
-                self.features[name] = torch.FloatTensor(feature.reshape(-1, 1))
-            else:
-                self.features[name] = torch.FloatTensor(feature)
+            try:
+                if feature_config['type'] == 'pretrained_embedding':
+                    # Convert object array to float array if needed
+                    if isinstance(feature, np.ndarray) and feature.dtype == np.dtype('O'):
+                        feature = np.stack(feature).astype(np.float32)
+                    self.features[name] = torch.FloatTensor(feature)
+                elif feature_config['type'] == 'binary_embedding':
+                    if isinstance(feature, np.ndarray) and feature.dtype == np.dtype('O'):
+                        feature = np.stack(feature).astype(np.float32)
+                    self.features[name] = torch.FloatTensor(feature)
+                elif feature_config['type'] == 'categorical':
+                    if isinstance(feature, np.ndarray) and feature.dtype == np.dtype('O'):
+                        feature = np.array(feature.tolist(), dtype=np.int64)
+                    self.features[name] = torch.LongTensor(feature)
+                elif feature_config['type'] == 'numeric':
+                    if isinstance(feature, np.ndarray) and feature.dtype == np.dtype('O'):
+                        feature = np.array(feature.tolist(), dtype=np.float32)
+                    self.features[name] = torch.FloatTensor(feature.reshape(-1, 1))
+                else:
+                    if isinstance(feature, np.ndarray) and feature.dtype == np.dtype('O'):
+                        feature = np.stack(feature).astype(np.float32)
+                    self.features[name] = torch.FloatTensor(feature)
+            except Exception as e:
+                print(f"Error processing feature {name}: {str(e)}")
+                print(f"Feature type: {feature_config['type']}")
+                print(f"Feature shape: {feature.shape if hasattr(feature, 'shape') else len(feature)}")
+                print(f"Feature dtype: {feature.dtype if hasattr(feature, 'dtype') else type(feature)}")
+                raise
         
         # Process labels
         self.labels = {}

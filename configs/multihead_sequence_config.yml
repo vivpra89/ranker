@@ -18,6 +18,7 @@ features:
     - anchor_taxonomy_id
     - event_dow
     - anchor_embeds
+    - interaction_sequence
 
   feature_configs:
     geo:
@@ -108,20 +109,37 @@ features:
       enabled: true
       type: pretrained_embedding
       dim: 64
+    interaction_sequence:
+      enabled: true
+      type: sequence
+      input_dim: 64
+      dim: 64
+      max_seq_length: 50
+      num_products: 1000
+      transformer_config:
+        num_heads: 4
+        nhead: 4
+        num_layers: 2
+        dim_feedforward: 256
+        dropout: 0.1
+        activation: "gelu"
+        layer_norm_eps: 1e-5
+        batch_first: true
+        norm_first: false
 
 model:
   architecture: "dcn_v2"
   dcn_config:
-    cross_layers: 2
-    num_heads: 1
-    hidden_layers: [256, 128, 64]
-    task_hidden_layers: [32, 16]
+    cross_layers: 3
+    num_heads: 4
+    hidden_layers: [512, 256, 128]
+    task_hidden_layers: [64, 32]
     dropout_rate: 0.1
-    activation: "relu"
+    activation: "gelu"
     use_batch_norm: true
-    use_layer_norm: false
+    use_layer_norm: true
     cross_dropout: 0.1
-    stochastic_depth_rate: 0.1
+    stochastic_depth_rate: 0.2
     feature_dropout: 0.05
     layer_wise_lr_decay: 0.9
 
@@ -212,76 +230,4 @@ data:
     max_samples_per_user: 100
 
 hyperparameter_tuning:
-  enabled: true
-  strategy:
-    name: "optuna"
-    n_trials: 5
-    timeout_hours: 1
-    n_jobs: -1
-
-  cross_validation:
-    n_splits: 2
-    shuffle: true
-    stratify: true
-
-  optimization_metric: "click_ndcg@10"
-  secondary_metrics: ["click_mrr", "click_map@10"]
-
-  parameter_space:
-    model.dcn_config.cross_layers:
-      type: "int"
-      range: [2, 3]
-    
-    model.dcn_config.num_heads:
-      type: "int"
-      range: [2, 4]
-    
-    model.dcn_config.hidden_layers:
-      type: "categorical"
-      values: [
-        [256, 128, 64],
-        [512, 256, 128]
-      ]
-    
-    model.dcn_config.dropout_rate:
-      type: "float"
-      range: [0.1, 0.2]
-      log: false
-    
-    model.dcn_config.cross_dropout:
-      type: "float"
-      range: [0.1, 0.2]
-      log: false
-    
-    model.dcn_config.stochastic_depth_rate:
-      type: "float"
-      range: [0.1, 0.2]
-      log: false
-    
-    model.dcn_config.feature_dropout:
-      type: "float"
-      range: [0.05, 0.1]
-      log: false
-    
-    training.optimizer.learning_rate:
-      type: "float"
-      range: [0.0005, 0.002]
-      log: true
-    
-    training.optimizer.weight_decay:
-      type: "float"
-      range: [0.005, 0.02]
-      log: true
-
-  early_stopping:
-    patience: 3
-    min_delta: 0.001
-
-  resources:
-    max_memory_gb: 32
-    gpu_ids: [0]
-
-  checkpointing:
-    save_top_k: 2
-    save_frequency: 2
-    checkpoint_dir: "hp_tuning_checkpoints" 
+  enabled: false 

@@ -1,27 +1,24 @@
 {
-  "number": 0,
+  "number": 1,
   "params": {
     "model.dcn_config.cross_layers": 3,
     "model.dcn_config.num_heads": 3,
     "model.dcn_config.hidden_layers": [
-      512,
       256,
-      128
+      128,
+      64
     ],
-    "model.dcn_config.dropout_rate": 0.19110147410584094,
-    "model.dcn_config.cross_dropout": 0.14690701254124097,
-    "model.dcn_config.stochastic_depth_rate": 0.10184071654379061,
-    "model.dcn_config.feature_dropout": 0.06568444144322821,
-    "training.optimizer.learning_rate": 0.0007780655533345329,
-    "training.optimizer.weight_decay": 0.0055244171357912404
+    "model.dcn_config.dropout_rate": 0.12227757394218125,
+    "model.dcn_config.cross_dropout": 0.16627276781566308,
+    "model.dcn_config.stochastic_depth_rate": 0.14563033798328653,
+    "model.dcn_config.feature_dropout": 0.08013696029198637,
+    "training.optimizer.learning_rate": 0.0005536886587323406,
+    "training.optimizer.weight_decay": 0.005791513873835794
   },
-  "score": 0.0,
+  "score": 42.633947253227234,
   "config": {
     "features": {
       "enabled_features": [
-        "product",
-        "user",
-        "interaction_sequence",
         "geo",
         "country",
         "price_0",
@@ -42,156 +39,111 @@
         "anchor_embeds"
       ],
       "feature_configs": {
-        "product": {
-          "enabled": true,
-          "type": "pretrained_embedding",
-          "dim": 64,
-          "description": "Product embeddings"
-        },
-        "user": {
-          "enabled": true,
-          "type": "pretrained_embedding",
-          "dim": 64,
-          "description": "User embeddings"
-        },
-        "interaction_sequence": {
-          "enabled": false,
-          "type": "sequence",
-          "input_dim": 64,
-          "dim": 64,
-          "max_seq_length": 50,
-          "num_products": 1000,
-          "transformer_config": {
-            "nhead": 4,
-            "num_layers": 2,
-            "dim_feedforward": 256,
-            "dropout": 0.1
-          },
-          "description": "Sequential product interactions"
-        },
         "geo": {
           "enabled": true,
           "type": "categorical",
           "dim": 16,
-          "num_categories": 4,
-          "description": "Geographic location"
+          "num_categories": 4
         },
         "country": {
           "enabled": true,
           "type": "categorical",
           "dim": 16,
-          "num_categories": 4,
-          "description": "Country"
+          "num_categories": 4
         },
         "price_0": {
           "enabled": true,
           "type": "numeric",
-          "dim": 16,
-          "description": "Product price"
+          "dim": 16
         },
         "category_0": {
           "enabled": true,
           "type": "categorical",
           "dim": 16,
-          "num_categories": 4,
-          "description": "Product category"
+          "num_categories": 4
         },
         "page_type": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 8,
-          "description": "Type of page"
+          "num_categories": 8
         },
         "age": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 6,
-          "description": "User age category"
+          "num_categories": 6
         },
         "gender": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 3,
-          "description": "User gender"
+          "num_categories": 3
         },
         "region": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 10,
-          "description": "User region"
+          "num_categories": 10
         },
         "product_body_part": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 20,
-          "description": "Body part category for product"
+          "num_categories": 20
         },
         "product_gender": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 3,
-          "description": "Gender category for product"
+          "num_categories": 3
         },
         "product_age_desc": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 6,
-          "description": "Age description for product"
+          "num_categories": 6
         },
         "product_taxonomy_id": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 100,
-          "description": "Taxonomy ID for product"
+          "num_categories": 100
         },
         "anchor_body_part": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 20,
-          "description": "Body part category for anchor"
+          "num_categories": 20
         },
         "anchor_gender": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 3,
-          "description": "Gender category for anchor"
+          "num_categories": 3
         },
         "anchor_age_desc": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 6,
-          "description": "Age description for anchor"
+          "num_categories": 6
         },
         "anchor_taxonomy_id": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 100,
-          "description": "Taxonomy ID for anchor"
+          "num_categories": 100
         },
         "event_dow": {
           "enabled": true,
           "type": "categorical",
           "dim": 1,
-          "num_categories": 7,
-          "description": "Day of week for event"
+          "num_categories": 7
         },
         "anchor_embeds": {
           "enabled": true,
           "type": "pretrained_embedding",
-          "dim": 64,
-          "description": "Anchor embeddings"
+          "dim": 64
         }
       }
     },
@@ -201,29 +153,29 @@
         "cross_layers": 3,
         "num_heads": 3,
         "hidden_layers": [
-          512,
           256,
-          128
+          128,
+          64
         ],
         "task_hidden_layers": [
-          64,
-          32
+          32,
+          16
         ],
-        "dropout_rate": 0.19110147410584094,
-        "activation": "gelu",
-        "use_batch_norm": false,
-        "use_layer_norm": true,
-        "cross_dropout": 0.14690701254124097,
-        "stochastic_depth_rate": 0.10184071654379061,
-        "feature_dropout": 0.06568444144322821,
+        "dropout_rate": 0.12227757394218125,
+        "activation": "relu",
+        "use_batch_norm": true,
+        "use_layer_norm": false,
+        "cross_dropout": 0.16627276781566308,
+        "stochastic_depth_rate": 0.14563033798328653,
+        "feature_dropout": 0.08013696029198637,
         "layer_wise_lr_decay": 0.9
       }
     },
     "training": {
       "optimizer": {
         "name": "adamw",
-        "learning_rate": 0.0007780655533345329,
-        "weight_decay": 0.0055244171357912404,
+        "learning_rate": 0.0005536886587323406,
+        "weight_decay": 0.005791513873835794,
         "beta1": 0.9,
         "beta2": 0.999,
         "layer_wise_lr": true
@@ -231,7 +183,7 @@
       "scheduler": {
         "enabled": true,
         "type": "cosine",
-        "warmup_steps": 5,
+        "warmup_steps": 100,
         "min_lr": 1e-06,
         "num_cycles": 3,
         "warmup_ratio": 0.1,
@@ -239,13 +191,14 @@
       },
       "training_config": {
         "batch_size": 32,
-        "num_epochs": 30,
-        "train_split": 0.8,
-        "validation_split": 0.1,
-        "test_split": 0.1,
-        "early_stopping": 5,
-        "early_stopping_patience": 3,
-        "early_stopping_min_delta": "1e-4",
+        "num_epochs": 10,
+        "train_split": 0.7,
+        "validation_split": 0.15,
+        "test_split": 0.15,
+        "early_stopping": {
+          "patience": 3,
+          "min_delta": 0.001
+        },
         "gradient_clipping": 1.0,
         "mixed_precision": true,
         "gradient_centralization": true,
@@ -263,16 +216,11 @@
         "loss": "bce",
         "metrics": [
           "auc",
-          "accuracy",
-          "precision",
-          "recall",
           "ndcg",
-          "mrr",
           "map",
           "precision_at_k",
           "recall_at_k"
-        ],
-        "description": "Click prediction"
+        ]
       },
       "purchase": {
         "enabled": true,
@@ -280,16 +228,11 @@
         "loss": "bce",
         "metrics": [
           "auc",
-          "accuracy",
-          "precision",
-          "recall",
           "ndcg",
-          "mrr",
           "map",
           "precision_at_k",
           "recall_at_k"
-        ],
-        "description": "Purchase prediction"
+        ]
       },
       "add_to_cart": {
         "enabled": true,
@@ -297,23 +240,16 @@
         "loss": "bce",
         "metrics": [
           "auc",
-          "accuracy",
-          "precision",
-          "recall",
           "ndcg",
-          "mrr",
           "map",
           "precision_at_k",
           "recall_at_k"
-        ],
-        "description": "Add to cart prediction"
+        ]
       }
     },
     "logging": {
       "wandb": {
-        "enabled": false,
-        "project": "reranker",
-        "entity": "commerce-ds"
+        "enabled": false
       },
       "tensorboard": {
         "enabled": true,
@@ -325,6 +261,12 @@
         "max_checkpoints": 3
       }
     },
+    "paths": {
+      "model_save_dir": "models/",
+      "best_model_path": "models/best_model.pth",
+      "log_dir": "logs/"
+    },
+    "device": "cpu",
     "data": {
       "input": {
         "max_sequence_length": 50,
@@ -341,12 +283,6 @@
         "max_samples_per_user": 100
       }
     },
-    "paths": {
-      "model_save_dir": "models/",
-      "best_model_path": "models/best_model.pth",
-      "log_dir": "logs/"
-    },
-    "device": "cpu",
     "hyperparameter_tuning": {
       "enabled": true,
       "strategy": {

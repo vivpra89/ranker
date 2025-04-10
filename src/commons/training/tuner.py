@@ -18,8 +18,8 @@ class HyperparameterTuner:
         self.base_config = base_config
         self.dataset = dataset
         self.tuning_config = tuning_config
-        self.best_trial = None
         self.best_score = float('-inf')
+        self.best_trial = None
         self.study = None
         self.setup_logging()
         
@@ -140,13 +140,7 @@ class HyperparameterTuner:
             )
             
             # Train and evaluate
-            best_score = trainer.train(
-                train_loader,
-                val_loader=val_loader,
-                early_stopping_patience=self.tuning_config['early_stopping']['patience'],
-                early_stopping_min_delta=self.tuning_config['early_stopping']['min_delta']
-            )
-            
+            best_score = trainer.train(train_loader, val_loader)
             fold_scores.append(best_score)
             
             # Report intermediate value
@@ -160,7 +154,7 @@ class HyperparameterTuner:
         final_score = np.mean(fold_scores)
         
         # Update best trial if needed
-        if final_score > self.best_score:
+        if final_score > self.best_score:  # We're maximizing the metric
             self.best_score = final_score
             self.best_trial = {
                 'number': trial.number,

@@ -1,4 +1,3 @@
-import argparse
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -10,7 +9,7 @@ from sklearn.preprocessing import LabelEncoder
 
 from commons.data.dataset import ReRankerDataset
 from commons.data.collate import collate_fn
-from commons.models import DCNModel
+from commons.models import DCNv2
 from commons.training import ReRankerTrainer
 from commons.training.tuner import HyperparameterTuner
 from commons.utils.config import load_config
@@ -23,36 +22,36 @@ def setup_optimizer_and_scheduler(model, config):
     scheduler_config = config['training']['scheduler']
     
     # Setup optimizer
-        optimizer = AdamW(
-            model.parameters(),
-            lr=optimizer_config['learning_rate'],
-            weight_decay=optimizer_config['weight_decay'],
-            betas=(optimizer_config['beta1'], optimizer_config['beta2'])
-        )
+    optimizer = AdamW(
+        model.parameters(),
+        lr=optimizer_config['learning_rate'],
+        weight_decay=optimizer_config['weight_decay'],
+        betas=(optimizer_config['beta1'], optimizer_config['beta2'])
+    )
     
     # Setup scheduler
     if scheduler_config['enabled']:
-            # Warmup scheduler
-            warmup_scheduler = LinearLR(
-                optimizer,
-                start_factor=0.1,
-                end_factor=1.0,
-                total_iters=scheduler_config['warmup_steps']
-            )
-            
-            # Main scheduler
-            main_scheduler = CosineAnnealingLR(
-                optimizer,
-                T_max=config['training']['training_config']['num_epochs'] - scheduler_config['warmup_steps'],
-                eta_min=scheduler_config['min_lr']
-            )
-            
-            # Combine schedulers
-            scheduler = SequentialLR(
-                optimizer,
-                schedulers=[warmup_scheduler, main_scheduler],
-                milestones=[scheduler_config['warmup_steps']]
-            )
+        # Warmup scheduler
+        warmup_scheduler = LinearLR(
+            optimizer,
+            start_factor=0.1,
+            end_factor=1.0,
+            total_iters=scheduler_config['warmup_steps']
+        )
+        
+        # Main scheduler
+        main_scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=config['training']['training_config']['num_epochs'] - scheduler_config['warmup_steps'],
+            eta_min=scheduler_config['min_lr']
+        )
+        
+        # Combine schedulers
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[warmup_scheduler, main_scheduler],
+            milestones=[scheduler_config['warmup_steps']]
+        )
     else:
         scheduler = None
     
@@ -101,14 +100,10 @@ def load_and_process_data(config):
     
     return features, labels
 
-def main():
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Train or tune the ranker model')
-    parser.add_argument('--tune', action='store_true', help='Run hyperparameter tuning')
-    args = parser.parse_args()
-
+def train_model(config_path: str, is_tuning: bool = False):
+    """Train a model using the specified configuration."""
     # Load configuration
-    config = load_config()
+    config = load_config(config_path)
     
     # Load and process data
     features, labels = load_and_process_data(config)
@@ -116,9 +111,45 @@ def main():
     # Create dataset
     dataset = ReRankerDataset(features, labels, config)
     
-    if args.tune:
+    # Create train/val/test split
+    train_size = int(len(dataset) * config['training']['training_config']['train_split'])
+    val_size = int(len(dataset) * config['training']['training_config']['validation_split'])
+    test_size = len(dataset) - train_size - val_size
+    
+    train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
+        dataset, 
+        [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config['training']['training_config']['batch_size'],
+        shuffle=True,
+        num_workers=0,
+        collate_fn=lambda batch: collate_fn(batch, config)
+    )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['training']['training_config']['batch_size'],
+        shuffle=False,
+        num_workers=0,
+        collate_fn=lambda batch: collate_fn(batch, config)
+    )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=config['training']['training_config']['batch_size'],
+        shuffle=False,
+        num_workers=0,
+        collate_fn=lambda batch: collate_fn(batch, config)
+    )
+    
+    if is_tuning:
         # Run hyperparameter tuning
-        print("Starting hyperparameter tuning...")
+        print(f"\nStarting hyperparameter tuning for {config_path}...")
         tuner = HyperparameterTuner(
             base_config=config,
             dataset=dataset,
@@ -129,82 +160,65 @@ def main():
         
         # Use best trial config for final training
         config = best_trial['config']
-        
-        # Create train/val/test split
-        train_size = int(len(dataset) * config['training']['training_config']['train_split'])
-        val_size = int(len(dataset) * config['training']['training_config']['validation_split'])
-        test_size = len(dataset) - train_size - val_size
-        
-        train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
-            dataset, 
-            [train_size, val_size, test_size],
-            generator=torch.Generator().manual_seed(42)
-        )
-        
-        # Create dataloaders
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=config['training']['training_config']['batch_size'],
-            shuffle=True,
-            num_workers=0,
-            collate_fn=lambda batch: collate_fn(batch, config)
-        )
-        
-        val_loader = DataLoader(
-            val_dataset,
-            batch_size=config['training']['training_config']['batch_size'],
-            shuffle=False,
-            num_workers=0,
-            collate_fn=lambda batch: collate_fn(batch, config)
-        )
-        
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=config['training']['training_config']['batch_size'],
-            shuffle=False,
-            num_workers=0,
-            collate_fn=lambda batch: collate_fn(batch, config)
-        )
-        
+    
     # Initialize model
-    model = DCNModel(config)
-        
-        # Setup optimizer and scheduler
-        optimizer, scheduler = setup_optimizer_and_scheduler(model, config)
-        
-        # Initialize trainer
-        trainer = ReRankerTrainer(
-            model=model,
-            optimizer=optimizer,
+    model = DCNv2(config)
+    
+    # Setup optimizer and scheduler
+    optimizer, scheduler = setup_optimizer_and_scheduler(model, config)
+    
+    # Initialize trainer
+    trainer = ReRankerTrainer(
+        model=model,
+        optimizer=optimizer,
         scheduler=scheduler,
         config=config
     )
     
     # Train model
-    print("\nTraining model...")
+    print(f"\nTraining model with {config_path}...")
     trainer.train(train_loader, val_loader)
-        
-        # Evaluate on test set
+    
+    # Evaluate on test set
     print("\nEvaluating model on test set...")
-        test_metrics = trainer.evaluate(test_loader)
-        print("\nTest metrics:")
-        for task, metrics in test_metrics.items():
+    test_metrics = trainer.evaluate(test_loader)
+    print("\nTest metrics:")
+    for task, metrics in test_metrics.items():
         if task == 'total_loss':
             print(f"\nTotal Loss: {metrics:.4f}")
         else:
             print(f"\n{task.upper()}:")
             for metric, value in metrics.items():
                 print(f"{metric}: {value:.4f}")
+    
+    # Save final model
+    model_name = Path(config_path).stem
+    final_model_path = Path(config['paths']['model_save_dir']) / f'final_model_{model_name}.pt'
+    final_model_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'config': config,
+        'test_metrics': test_metrics
+    }, final_model_path)
+    print(f"\nFinal model saved to {final_model_path}")
+
+def main():
+    """Run training for all configurations."""
+    config_files = [
+        'configs/base_config.yml',
+        'configs/moe_config.yml',
+        'configs/multihead_sequence_config.yml',
+        'configs/tuning_config.yml'
+    ]
+    
+    for config_file in config_files:
+        print(f"\n{'='*80}")
+        print(f"Processing {config_file}")
+        print(f"{'='*80}")
         
-        # Save final model
-        final_model_path = Path(config['paths']['model_save_dir']) / 'final_model.pt'
-        final_model_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'config': config,
-            'test_metrics': test_metrics
-        }, final_model_path)
-        print(f"\nFinal model saved to {final_model_path}")
+        # Run training with tuning for tuning config
+        is_tuning = 'tuning' in config_file
+        train_model(config_file, is_tuning)
 
 if __name__ == "__main__":
     main() 

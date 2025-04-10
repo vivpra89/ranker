@@ -264,38 +264,47 @@ class DCNv2(nn.Module):
                 )
     
     def _initialize_networks(self, input_dim: int):
-        """Initialize networks with the correct input dimension."""
-        dcn_config = self.config['model']['dcn_config']
-        
-        # Initialize cross network
+        """Initialize cross and deep networks."""
+        # Cross network
         self.cross_net = nn.ModuleList([
             CrossNetV2Layer(
-                num_heads=dcn_config['num_heads'],
-                dropout=dcn_config['cross_dropout']
-            ) for _ in range(dcn_config['cross_layers'])
+                num_heads=self.config['model']['dcn_config']['num_heads'],
+                dropout=self.config['model']['dcn_config']['cross_dropout']
+            )
+            for _ in range(self.config['model']['dcn_config']['cross_layers'])
         ])
         
-        # Initialize deep network
+        # Deep network
         self.deep_network = DeepNetwork(
             input_dim=input_dim,
-            hidden_layers=dcn_config['hidden_layers'],
-            dropout_rate=dcn_config['dropout_rate'],
-            activation=dcn_config['activation'],
-            use_batch_norm=dcn_config['use_batch_norm'],
-            use_layer_norm=dcn_config['use_layer_norm']
+            hidden_layers=self.config['model']['dcn_config']['hidden_layers'],
+            dropout_rate=self.config['model']['dcn_config']['dropout_rate'],
+            activation=self.config['model']['dcn_config']['activation'],
+            use_batch_norm=self.config['model']['dcn_config']['use_batch_norm'],
+            use_layer_norm=self.config['model']['dcn_config']['use_layer_norm']
         )
         
-        # Initialize task networks
-        combined_dim = input_dim + dcn_config['hidden_layers'][-1]
-        self.task_networks = nn.ModuleDict({
-            task: TaskNetwork(
+        # Combined dimension after concatenating cross and deep outputs
+        combined_dim = input_dim + self.config['model']['dcn_config']['hidden_layers'][-1]
+        
+        # Initialize MoE if enabled
+        if self.use_moe:
+            self.moe = MixtureOfExperts(
+                config=self.config,
                 input_dim=combined_dim,
-                hidden_layers=dcn_config['task_hidden_layers'],
-                dropout_rate=dcn_config['dropout_rate'],
-                activation=dcn_config['activation']
+                output_dim=combined_dim
             )
-            for task in self.tasks
-        })
+        
+        # Task-specific networks
+        self.task_networks = nn.ModuleDict()
+        for task in self.tasks:
+            if self.config['tasks'][task]['enabled']:
+                self.task_networks[task] = TaskNetwork(
+                    input_dim=combined_dim,
+                    hidden_layers=self.config['model']['dcn_config']['task_hidden_layers'],
+                    dropout_rate=self.config['model']['dcn_config']['dropout_rate'],
+                    activation=self.config['model']['dcn_config']['activation']
+                )
         
         # Move to correct device
         self.cross_net = self.cross_net.to(self.device)

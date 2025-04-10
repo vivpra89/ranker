@@ -1,4 +1,4 @@
-from .dcn import DCNv2 as DCNModel
-from .sequence_encoder import SequenceEncoder
+from .dcn import DCNv2
+from .moe import MixtureOfExperts
 
-__all__ = ['DCNModel', 'SequenceEncoder']
+__all__ = ['DCNv2', 'MixtureOfExperts']
